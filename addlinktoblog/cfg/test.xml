@@ -1,0 +1,5 @@
+<config>
+    <dbclient name="sqlemlog" host="127.0.0.1" passwd="1411714511" user="sqlemlog" port="3306"></dbclient>
+    <filename path="/home/lighthouse/classtest/out.txt" mode="w+"></filename>
+	<log></log>
+</config>

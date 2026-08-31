@@ -1,0 +1,41 @@
+
+PWD=$(shell pwd)
+BUILD_PATH=./bin
+# set source directory
+SRCPATH=$(PWD)/src
+BUILDPATH=$(PWD)/$(BUILD_PATH)
+# we should write .cpp or .pc files to here
+FILES=classtest.cpp main.cpp mythread.cpp
+TLIB=$(BUILDPATH)/classtest
+# automatic obtain .cpp and .o files
+# obtain .cpp files from FILES
+SRCS=$(call GetCC, $(SRCPATH), $(FILES))
+# obtain .o files from FILES
+OBJS=$(call GetObj, $(BUILDPATH), $(FILES))
+# obtain .cpp files from .pc files
+PCCSRCS=$(call GetPCC, $(SRCPATH), $(FILES))
+# obtain .d from .cpp files
+DEPD=$(subst .cpp,.d, $(SRCS) $(PCCSRCS))
+
+# create build directory
+tmpvar:=$(call CreateDir, $(BUILDPATH))
+tmpvar=$(call CreateDir, $(CMN_LIB_PATH))
+
+.PHONY: all clean distclean
+all: $(TLIB)
+
+# we should use copy more than move	
+$(TLIB): $(OBJS)
+	gcc -o $@ $^ 
+clean:
+	@- rm -f $(TLIB) $(DLIB) $(OBJS) $(PCCSRCS)
+
+distclean:clean
+	@- rm -rf $(DEPD) $(BUILDPATH)
+	
+# include .d files for trace .h files
+ifeq "$(DEPFLAG)" "0"
+include $(DEPD)
+endif
+
+	
