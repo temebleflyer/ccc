@@ -6,11 +6,29 @@
 #include <sys/epoll.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <errno.h>
+#include <signal.h>
+#include "ThreadPool.h"
+
 using namespace std;
 
 #define MAX_EVENTS  2048
 #define PORT        8888
 #define BUFF_SIZE   2048
+#define THREAD_COUNT    4
+
+int setNoBlock(int fd)
+{
+    //set noblock
+    int flag = fcntl(fd, F_GETFL, 0);
+    if (flag == -1)
+    {
+        cout << "set noblock error" << endl;
+        return -1;
+    }
+
+    return fcntl(fd, F_SETFL, flag | O_NONBLOCK);
+}
 
 int setListen()
 {
@@ -44,33 +62,65 @@ int setListen()
         exit(-1);
     }
 
+    if (setNoBlock(listen_fd) == -1)
+    {
+        cout << "set listen fd no block error" << endl;
+        close(listen_fd);
+        exit(1);
+    }
     return listen_fd;
 }
 
-int setNoBlock(int listen_fd)
+void handleClient(int client_fd, int epoll_fd)
 {
-    //set noblock
-    int flag = fcntl(listen_fd, F_GETFL, 0);
-    if (flag == -1)
+    char buff[BUFF_SIZE];
+    while (true)
     {
-        cout << "set noblock error" << endl;
-        exit(-1);
+        ssize_t len = read(client_fd, buff, BUFF_SIZE - 1);
+        if (len > 0)
+        {
+            buff[len] = '\0';
+            cout << "Thread:" << this_thread::get_id() << "recv:" << len << "bytes form fd:" << client_fd   \
+            << "data:" << buff << endl;
+            //resp
+            ssize_t written = write(client_fd, buff, len);
+            if (written == -1 && errno != EAGAIN && errno != EWOULDBLOCK)
+            {
+                perror("write");
+                close(client_fd);
+                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, NULL);
+            }
+        }
+        else if (len == 0)
+        {
+            cout << "client close fd:" << client_fd << endl;
+            close(client_fd);
+            epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, NULL);
+            break;
+        }
+        else
+        {
+            if (errno != EAGAIN && errno != EWOULDBLOCK)
+            {
+                perror("read");
+                close(client_fd);
+                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, client_fd, NULL);
+                break;
+            }
+        }
     }
 
-    if (fcntl(listen_fd, F_SETFL, flag | O_NONBLOCK) == -1)
-    {
-        cout << "set noblock error" << endl;
-        exit(-1);
-    }
-
-    return listen_fd;
 }
 
 int main()
 {
+    signal(SIGPIPE, SIG_IGN);   //ignore client exit write error
+    ThreadPool pool(THREAD_COUNT);
+    cout << "thread pool create with :" << THREAD_COUNT << "threads" << endl;
+    //create listen
     int listen_fd = setListen();
-    listen_fd = setNoBlock(listen_fd);
-    //创建epoll
+
+    //create epoll
     int epoll_fd = epoll_create(1); //requre > 0
     if (epoll_fd == -1)
     {
@@ -79,7 +129,7 @@ int main()
         exit(-1);
     }
 
-    //listen_fd add to epoll
+    //add listen_fd to epoll
     struct epoll_event ev;
     ev.events = EPOLLIN;
     ev.data.fd = listen_fd;
@@ -101,6 +151,7 @@ int main()
             cout << "epoll wait error" << endl;
             break;
         }
+
         for (int i = 0; i < nfds; i++)
         {
             int fd = events[i].data.fd;
@@ -111,12 +162,22 @@ int main()
                 int client_fd = accept(listen_fd, (struct sockaddr*)&client_addr, &client_len);
                 if (client_fd == -1)
                 {
-                    cout << "accept error" << endl;
+                    if (errno != EAGAIN && errno != EWOULDBLOCK)
+                    {
+                        cout << "accept error" << endl;
+                    }
+                    continue;
+                }
+                //set no block
+                if (setNoBlock(client_fd) == -1)
+                {
+                    perror("set noblock error");
+                    close(client_fd);
                     continue;
                 }
 
-                //client socket add to epoll
-                ev.events = EPOLLIN;
+                //add client socket to epoll
+                ev.events = EPOLLIN | EPOLLET;  //set ET mode
                 ev.data.fd = client_fd;
                 if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &ev) == -1)
                 {
@@ -130,6 +191,13 @@ int main()
                     client_fd
                 );
             }
+            else    //thread pool todo task
+            {
+                pool.enqueue([fd, epoll_fd]() {
+                    handleClient(fd, epoll_fd);
+                });
+            }
+#if 0
             else    //deal exist client
             {
                 char buff[BUFF_SIZE];
@@ -166,6 +234,7 @@ int main()
                     }
                 }
             }
+#endif
         }
     }
 
